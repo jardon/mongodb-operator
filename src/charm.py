@@ -31,8 +31,7 @@ from charms.mongodb.v0.mongodb import (
 from charms.mongodb.v0.mongodb_provider import MongoDBProvider
 from charms.mongodb.v0.mongodb_tls import MongoDBTLS
 from charms.mongodb.v0.mongodb_vm_legacy_provider import MongoDBLegacyProvider
-from charms.operator_libs_linux.v0 import apt
-from charms.operator_libs_linux.v1 import systemd
+from charms.operator_libs_linux.v1 import ( systemd, snap )
 from ops.main import main
 from ops.model import (
     ActiveStatus,
@@ -56,14 +55,9 @@ from machine_helpers import (
 logger = logging.getLogger(__name__)
 
 PEER = "database-peers"
-REPO_URL = "deb-https://repo.mongodb.org/apt/ubuntu-focal/mongodb-org/5.0"
-REPO_ENTRY = (
-    "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/5.0 multiverse"
-)
-GPG_URL = "https://www.mongodb.org/static/pgp/server-5.0.asc"
 MONGO_EXEC_LINE = 10
 MONGO_USER = "mongodb"
-MONGO_DATA_DIR = "/data/db"
+MONGO_DATA_DIR = "/var/snap/mongodb/common/db"
 
 # We expect the MongoDB container to use the default ports
 MONGODB_PORT = 27017
@@ -278,14 +272,14 @@ class MongodbOperatorCharm(ops.charm.CharmBase):
     def _on_install(self, event) -> None:
         """Handle the install event (fired on startup).
 
-        Handles the startup install event -- installs updates the apt cache,
+        Handles the startup install event -- installs updates the snap cache,
         installs MongoDB.
         """
         self.unit.status = MaintenanceStatus("installing MongoDB")
         try:
-            self._add_repository(REPO_URL, GPG_URL, REPO_ENTRY)
-            self._install_apt_packages(["mongodb-org"])
-        except (apt.InvalidSourceError, ValueError, apt.GPGKeyError, URLError):
+            self._install_snap_packages(["mongodb"])
+        except Exception as err:
+            logger.error(err)
             self.unit.status = BlockedStatus("couldn't install MongoDB")
 
         # if a new unit is joining a cluster with a legacy relation it should start without auth
@@ -450,63 +444,22 @@ class MongodbOperatorCharm(ops.charm.CharmBase):
             logger.exception("failed opening port: %s", str(e))
             raise
 
-    def _add_repository(
-        self, repo_url: str, gpg_url: str, repo_entry: str
-    ) -> apt.RepositoryMapping:
-        """Adds MongoDB repo to container.
-
-        Args:
-            repo_url: deb-https url of repo to add
-            gpg_url: url to retrieve GPP key
-            repo_entry: a string representing a repository entry
-        """
-        repositories = apt.RepositoryMapping()
-
-        # Add the repository if it doesn't already exist
-        if repo_url not in repositories:
-            # Get GPG key
-            try:
-                key = urlopen(gpg_url).read().decode()
-            except URLError as e:
-                logger.exception("failed to get GPG key, reason: %s", e)
-                self.unit.status = BlockedStatus("couldn't install MongoDB")
-                return
-
-            # Add repository
-            try:
-                repo = apt.DebianRepository.from_repo_line(repo_entry)
-                # Import the repository's key
-                repo.import_key(key)
-                repositories.add(repo)
-            except (apt.InvalidSourceError, ValueError, apt.GPGKeyError) as e:
-                logger.error("failed to add repository: %s", str(e))
-                raise e
-
-        return repositories
-
-    def _install_apt_packages(self, packages: List[str]) -> None:
+    def _install_snap_packages(self, packages: List[str]) -> None:
         """Installs package(s) to container.
 
         Args:
             packages: list of packages to install.
         """
-        try:
-            logger.debug("updating apt cache")
-            apt.update()
-        except subprocess.CalledProcessError as e:
-            logger.exception("failed to update apt cache: %s", str(e))
-            self.unit.status = BlockedStatus("couldn't install MongoDB")
-            return
+        for package in packages:
+             try:
+                 cache = snap.SnapCache()
+                 mongodb = cache["mongodb"]
 
-        try:
-            logger.debug("installing apt packages: %s", ", ".join(packages))
-            apt.add_package(packages)
-        except apt.PackageNotFoundError:
-            logger.error("a specified package not found in package cache or on system")
-            self.unit.status = BlockedStatus("couldn't install MongoDB")
-        except TypeError as e:
-            logger.error("could not add package(s) to install: %s", str(e))
-            self.unit.status = BlockedStatus("couldn't install MongoDB")
+                 if not mongodb.present:
+                     mongodb.ensure(snap.SnapState.Latest, channel="5.0/edge")
+             except snap.SnapError as e:
+                 logger.error("An exception occurred when installing mongodb. Reason: %s", e.message)
+                 self.unit.status = BlockedStatus("couldn't install MongoDB")
 
     def _instatiate_keyfile(self, event: ops.charm.StartEvent) -> None:
         # wait for keyFile to be created by leader unit

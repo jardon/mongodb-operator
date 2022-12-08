@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 # systemd gives files in /etc/systemd/system/ precedence over those in /lib/systemd/system/ hence
 # our changed file in /etc will be read while maintaining the original one in /lib.
-MONGOD_SERVICE_UPSTREAM_PATH = "/lib/systemd/system/mongod.service"
-MONGOD_SERVICE_DEFAULT_PATH = "/etc/systemd/system/mongod.service"
+MONGOD_SERVICE_UPSTREAM_PATH = "/etc/systemd/system/snap.mongodb.mongod.service"
+MONGOD_SERVICE_DEFAULT_PATH = "/etc/systemd/system/snap.mongodb.mongod.service"
 
 # restart options specify that systemd should attempt to restart the service on failure.
 RESTART_OPTIONS = ["Restart=always\n", "RestartSec=5s\n"]
@@ -48,7 +48,7 @@ def start_with_auth(path):
 
 def stop_mongod_service() -> None:
     """Stop the mongod service if running."""
-    if not systemd.service_running("mongod.service"):
+    if not systemd.service_running("snap.mongodb.mongod.service"):
         return
 
     logger.debug("stopping mongod.service")
@@ -66,7 +66,7 @@ def start_mongod_service() -> None:
 
     logger.debug("starting mongod.service")
     try:
-        systemd.service_start("mongod.service")
+        systemd.service_start("snap.mongodb.mongod.service")
     except systemd.SystemdError as e:
         logger.error("failed to enable mongod.service, error: %s", str(e))
         raise
@@ -123,7 +123,9 @@ def generate_service_args(auth: bool, machine_ip: str, config: MongoDBConfigurat
     options.
     """
     mongod_start_args = [
-        "ExecStart=/usr/bin/mongod",
+        "ExecStart=/usr/bin/snap",
+        "run",
+        "mongodb.mongod",
         # bind to localhost and external interfaces
         "--bind_ip_all",
         # part of replicaset
